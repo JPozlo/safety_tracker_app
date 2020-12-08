@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "14414872067",
+    "project_id": "flutter-safety-tracker",
+    "storage_bucket": "flutter-safety-tracker.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:14414872067:android:3ec10f8915a81824239836",
+        "android_client_info": {
+          "package_name": "com.osolo.safety_tracker_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "14414872067-h03liuph85lrqjr2uhmr1jb97dc17fib.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDlFgaHbTmWzwBCbNbUrd2AGcXf_hrrAT4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "14414872067-h03liuph85lrqjr2uhmr1jb97dc17fib.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

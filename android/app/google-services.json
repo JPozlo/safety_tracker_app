@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "14414872067-d4k5814s6ngn546uo7athcj6ro0r3tam.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.osolo.safety_tracker_app",
+            "certificate_hash": "f917d2ddfa9fdfb3233a149684a37793e62c2979"
+          }
+        },
+        {
           "client_id": "14414872067-h03liuph85lrqjr2uhmr1jb97dc17fib.apps.googleusercontent.com",
           "client_type": 3
         }

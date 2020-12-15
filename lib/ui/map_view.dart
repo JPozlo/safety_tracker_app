@@ -1,42 +1,42 @@
 import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PlatformException, rootBundle;
 import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:location/location.dart';
 import 'package:geolocator/geolocator.dart' as MyGeolocator;
-import 'package:safety_tracker_app/utils/constants.dart';
+import 'package:safety_tracker_app/services/services.dart';
+import 'package:safety_tracker_app/utils/utils.dart';
 
 class MapPage extends StatefulWidget {
-  MapPage({Key key, this.title}) : super(key: key);
+  MapPage({Key key, this.title, this.theGroupId}) : super(key: key);
   final String title;
+  final String theGroupId;
 
   @override
   _MapPageState createState() => _MapPageState();
 }
 
 class _MapPageState extends State<MapPage> {
-  final LatLng destinationCoords = LatLng(-1.351429, 36.759981);
   PolylinePoints polylinePoints;
-  final startAddressController = TextEditingController();
-  final destinationAddressController = TextEditingController();
-  String _startAddress = '';
   String _placeDistance;
 
   final MyGeolocator.Geolocator _geolocator = MyGeolocator.Geolocator();
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 // For storing the current position
-  List<LatLng> polylineCoordinates = [];
-  Map<PolylineId, Polyline> polylines = {};
-  Set<Marker> markers = {};
+  List<LatLng> _polylineCoordinates = [];
+  Map<PolylineId, Polyline> _polylines = {};
+  Set<Polyline> _myPolylines = {};
+  Set<Marker> _markers = {};
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  bool running = false;
+  bool _running = false;
+  bool _hasRun = false;
   MyGeolocator.Position _firstUserPosition;
   MyGeolocator.Position _currentPosition;
-  MyGeolocator.Position _lastUserPosition;
-  double finalDistance;
 
   StreamSubscription _locationSubscription;
   Location _locationTracker = Location();
@@ -44,68 +44,27 @@ class _MapPageState extends State<MapPage> {
   Circle circle;
   GoogleMapController _controller;
 
+  double _totalDistance = 0.0;
+  DateTime _startTime;
+  DateTime _endTime;
+
   static final CameraPosition initialLocation = CameraPosition(
     target: LatLng(0.0, 0.0),
     zoom: 14.4746,
   );
 
-  Widget _textField({
-    TextEditingController controller,
-    String label,
-    String hint,
-    String initialValue,
-    double width,
-    Icon prefixIcon,
-    Widget suffixIcon,
-    Function(String) locationCallback,
-  }) {
-    return Container(
-      width: width * 0.8,
-      child: TextFormField(
-        onChanged: (value) {
-          locationCallback(value);
-        },
-        controller: controller,
-        // initialValue: initialValue,
-        decoration: new InputDecoration(
-          prefixIcon: prefixIcon,
-          suffixIcon: suffixIcon,
-          labelText: label,
-          filled: true,
-          fillColor: Colors.white,
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.all(
-              Radius.circular(10.0),
-            ),
-            borderSide: BorderSide(
-              color: Colors.grey[400],
-              width: 2,
-            ),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.all(
-              Radius.circular(10.0),
-            ),
-            borderSide: BorderSide(
-              color: Colors.blue[300],
-              width: 2,
-            ),
-          ),
-          contentPadding: EdgeInsets.all(15),
-          hintText: hint,
-        ),
-      ),
-    );
-  }
-
   Future<Uint8List> getUserMarker() async {
-    ByteData byteData = await rootBundle.load("images/driving_pin.png");
+    ByteData byteData = await rootBundle.load("images/tracking_marker.png");
     return byteData.buffer.asUint8List();
   }
 
   Future<Uint8List> getDestinationMarker() async {
-    ByteData byteData =
-        await rootBundle.load("images/destination_map_marker.png");
+    ByteData byteData = await rootBundle.load("images/location_marker.png");
+    return byteData.buffer.asUint8List();
+  }
+
+  Future<Uint8List> getStartMarker() async {
+    ByteData byteData = await rootBundle.load("images/location_marker.png");
     return byteData.buffer.asUint8List();
   }
 
@@ -124,33 +83,40 @@ class _MapPageState extends State<MapPage> {
       travelMode: TravelMode.walking,
     );
 
-    // Adding the coordinates to the list
-    if (result.points.isNotEmpty) {
-      result.points.forEach((PointLatLng point) {
-        polylineCoordinates.add(LatLng(point.latitude, point.longitude));
+    print("RESULTS of POLYLINE: $result");
+
+    if (result != null) {
+      // Adding the coordinates to the list
+      if (result.points.isNotEmpty) {
+        result.points.forEach((PointLatLng point) {
+          _polylineCoordinates.add(LatLng(point.latitude, point.longitude));
+        });
+      }
+
+      // Defining an ID
+      PolylineId id = PolylineId('poly');
+
+      // Initializing Polyline
+      Polyline polyline = Polyline(
+        polylineId: id,
+        color: Colors.red,
+        points: _polylineCoordinates,
+        width: 3,
+      );
+
+      // Adding the polyline to the map
+      setState(() {
+        _polylines[id] = polyline;
+        _myPolylines.add(polyline);
       });
     }
-
-    // Defining an ID
-    PolylineId id = PolylineId('poly');
-
-    // Initializing Polyline
-    Polyline polyline = Polyline(
-      polylineId: id,
-      color: Colors.red,
-      points: polylineCoordinates,
-      width: 3,
-    );
-
-    // Adding the polyline to the map
-    polylines[id] = polyline;
   }
 
   void updateMarkerAndCircle(LocationData newLocalData, Uint8List imageData) {
     LatLng latlng = LatLng(newLocalData.latitude, newLocalData.longitude);
     this.setState(() {
       marker = Marker(
-          markerId: MarkerId("home"),
+          markerId: MarkerId("user"),
           position: latlng,
           infoWindow: InfoWindow(title: "User Marker"),
           rotation: newLocalData.heading,
@@ -166,17 +132,133 @@ class _MapPageState extends State<MapPage> {
           strokeColor: Colors.blue,
           center: latlng,
           fillColor: Colors.blue.withAlpha(70));
-      markers.add(marker);
+      _markers.add(marker);
     });
   }
 
-   _getFirstCurrentLocation() async {
-   await _geolocator
+  void setStartMarkerAndCircle(
+      MyGeolocator.Position newLocalData, Uint8List imageData) {
+    LatLng latlng = LatLng(newLocalData.latitude, newLocalData.longitude);
+    this.setState(() {
+      marker = Marker(
+          markerId: MarkerId("location1"),
+          position: latlng,
+          infoWindow: InfoWindow(title: "Location Marker 1"),
+          rotation: newLocalData.heading,
+          draggable: false,
+          zIndex: 2,
+          flat: true,
+          anchor: Offset(0.5, 0.5),
+          icon: BitmapDescriptor.fromBytes(imageData));
+    });
+    _markers.add(marker);
+  }
+
+  void setEndMarkerAndCircle(MyGeolocator.Position firstLocalData,
+      MyGeolocator.Position newLocalData, Uint8List imageData) {
+    LatLng latlng = LatLng(newLocalData.latitude, newLocalData.longitude);
+    this.setState(() {
+      Marker marker1 = Marker(
+          markerId: MarkerId("location1"),
+          position: latlng,
+          infoWindow: InfoWindow(title: "Location Marker 1"),
+          rotation: firstLocalData.heading,
+          draggable: false,
+          zIndex: 2,
+          flat: true,
+          anchor: Offset(0.5, 0.5),
+          icon: BitmapDescriptor.fromBytes(imageData));
+      Marker marker2 = Marker(
+          markerId: MarkerId("location2"),
+          position: latlng,
+          infoWindow: InfoWindow(title: "Location Marker 2"),
+          rotation: newLocalData.heading,
+          draggable: false,
+          zIndex: 2,
+          flat: true,
+          anchor: Offset(0.5, 0.5),
+          icon: BitmapDescriptor.fromBytes(imageData));
+      _markers.add(marker1);
+      _markers.add(marker2);
+    });
+  }
+
+  // Method for calculating the distance between two places
+  Future<bool> _calculateDistance() async {
+    try {
+      // Use the retrieved coordinates of the current position,
+      // instead of the address if the start position is user's
+      // current position, as it results in better accuracy.
+      MyGeolocator.Position startCoordinates = MyGeolocator.Position(
+          latitude: _firstUserPosition.latitude,
+          longitude: _firstUserPosition.longitude);
+
+      MyGeolocator.Position destinationCoordinates = MyGeolocator.Position(
+          latitude: _currentPosition.latitude,
+          longitude: _currentPosition.longitude);
+
+      // Calculating the distance between the start and the end positions
+      // with a straight path, without considering any route
+      // double distanceInMeters = await Geolocator().bearingBetween(
+      //   startCoordinates.latitude,
+      //   startCoordinates.longitude,
+      //   destinationCoordinates.latitude,
+      //   destinationCoordinates.longitude,
+      // );
+
+      await _createPolylines(startCoordinates, destinationCoordinates);
+
+      print("POLYLINE COORDS LENGTH: ${_polylineCoordinates.length}");
+
+      // Calculating the total distance by adding the distance
+      // between small segments
+      if (_polylineCoordinates.length > 0) {
+        for (int i = 0; i < _polylineCoordinates.length - 1; i++) {
+          _totalDistance += _coordinateDistance(
+            _polylineCoordinates[i].latitude,
+            _polylineCoordinates[i].longitude,
+            _polylineCoordinates[i + 1].latitude,
+            _polylineCoordinates[i + 1].longitude,
+          );
+          print(
+              "LOOP $i OF TOTAL DISTANCE CALCULATION: ${_totalDistance.toStringAsFixed(2)}");
+        }
+      } else {
+        _totalDistance = 0.0;
+      }
+
+      setState(() {
+        _totalDistance = _totalDistance;
+        _placeDistance = _totalDistance.toStringAsFixed(2);
+        print('PLACE DISTANCE AS FIXED: $_placeDistance m');
+        print('DISTANCE: ${_totalDistance.toString()} m');
+      });
+      return true;
+    } catch (e) {
+      print("Calculate distance due to: $e");
+    }
+    return false;
+  }
+
+  // Formula for calculating distance between two coordinates
+  // https://stackoverflow.com/a/54138876/11910277
+  double _coordinateDistance(lat1, lon1, lat2, lon2) {
+    var p = 0.017453292519943295;
+    var c = cos;
+    var a = 0.5 -
+        c((lat2 - lat1) * p) / 2 +
+        c(lat1 * p) * c(lat2 * p) * (1 - c((lon2 - lon1) * p)) / 2;
+    return 12742 * asin(sqrt(a));
+  }
+
+  _getFirstCurrentLocation() async {
+    await _geolocator
         .getCurrentPosition(desiredAccuracy: MyGeolocator.LocationAccuracy.high)
         .then((MyGeolocator.Position position) async {
+      var imageData = await getStartMarker();
       setState(() {
         _firstUserPosition = position;
-
+        setStartMarkerAndCircle(position, imageData);
         // For moving the camera to current location
         _controller.animateCamera(
           CameraUpdate.newCameraPosition(
@@ -193,159 +275,51 @@ class _MapPageState extends State<MapPage> {
   }
 
   _getLastCurrentLocation() async {
-    await _geolocator
-        .getCurrentPosition(desiredAccuracy: MyGeolocator.LocationAccuracy.high)
-        .then((MyGeolocator.Position position) async {
-      setState(() {
+    var imageData = await getStartMarker();
+    print("The total distance is: $_totalDistance kilometres");
+    print("The first user position coordinates is: $_firstUserPosition");
+    print("The current user position coordinates is: $_currentPosition");
 
-        _lastUserPosition = position;
-        // For moving the camera to current location
-        _controller.animateCamera(
-          CameraUpdate.newCameraPosition(
-            CameraPosition(
-              target: LatLng(position.latitude, position.longitude),
-              zoom: 18.0,
-            ),
-          ),
-        );
-      });
-    }).catchError((e) {
-      print(e);
+    getStringPrefs(Constants.groupID)
+        .then((value) => {
+      GroupService()
+          .saveRun(
+          distance: _totalDistance,
+          groupId: value,
+          startTime: _startTime,
+          endTime: _endTime)
+          .then((val) {
+        print("Added Run successfully to firestore");
+      }).catchError((e) {
+        print("Error adding run to firestore due to: $e");
+      })
+    })
+        .catchError((err) {
+      print("Error getting group id due to: $err");
     });
-  }
 
-  // Method for calculating the distance between two places
-  Future<bool> _calculateDistance() async {
-    try {
-        // Use the retrieved coordinates of the current position,
-        // instead of the address if the start position is user's
-        // current position, as it results in better accuracy.
-        MyGeolocator.Position startCoordinates = MyGeolocator.Position(
-                    latitude: _firstUserPosition.latitude,
-                    longitude: _firstUserPosition.longitude);
-
-        MyGeolocator.Position destinationCoordinates = MyGeolocator.Position(
-          latitude: _lastUserPosition.latitude,
-          longitude: _lastUserPosition.longitude
-        );
-
-
-        Uint8List imageData = await getDestinationMarker();
-
-        // Start Location Marker
-        Marker startMarker = Marker(
-          markerId: MarkerId('$startCoordinates'),
-          position: LatLng(
-            startCoordinates.latitude,
-            startCoordinates.longitude,
+    setState(() {
+      _endTime = DateTime.now();
+      _createPolylines(_firstUserPosition, _currentPosition);
+      setEndMarkerAndCircle(_firstUserPosition, _currentPosition, imageData);
+      // For moving the camera to current location
+      _controller.animateCamera(
+        CameraUpdate.newCameraPosition(
+          CameraPosition(
+            target:
+            LatLng(_currentPosition.latitude, _currentPosition.longitude),
+            zoom: 18.0,
           ),
-          infoWindow: InfoWindow(
-            title: 'Start',
-            snippet: _startAddress,
-          ),
-          icon: BitmapDescriptor.defaultMarker,
-        );
+        ),
+      );
+    });
 
-        // Destination Location Marker
-        Marker destinationMarker = Marker(
-            markerId: MarkerId("stopMarker"),
-            position: destinationCoords,
-            infoWindow: InfoWindow(title: "Endpoints Marker Finish"),
-            draggable: false,
-            zIndex: 2,
-            flat: true,
-            anchor: Offset(0.5, 0.5),
-            icon: BitmapDescriptor.fromBytes(imageData));
-
-        // Adding the markers to the list
-        markers.add(startMarker);
-        markers.add(destinationMarker);
-
-        print('START COORDINATES: $startCoordinates');
-        print('DESTINATION COORDINATES: $destinationCoordinates');
-
-        MyGeolocator.Position _northeastCoordinates;
-        MyGeolocator.Position _southwestCoordinates;
-
-        // Calculating to check that
-        // southwest coordinate <= northeast coordinate
-        if (startCoordinates.latitude <= destinationCoordinates.latitude) {
-          _southwestCoordinates = startCoordinates;
-          _northeastCoordinates = destinationCoordinates;
-        } else {
-          _southwestCoordinates = destinationCoordinates;
-          _northeastCoordinates = startCoordinates;
-        }
-
-        // Accomodate the two locations within the
-        // camera view of the map
-        _controller.animateCamera(
-          CameraUpdate.newLatLngBounds(
-            LatLngBounds(
-              northeast: LatLng(
-                _northeastCoordinates.latitude,
-                _northeastCoordinates.longitude,
-              ),
-              southwest: LatLng(
-                _southwestCoordinates.latitude,
-                _southwestCoordinates.longitude,
-              ),
-            ),
-            100.0,
-          ),
-        );
-
-        // Calculating the distance between the start and the end positions
-        // with a straight path, without considering any route
-        // double distanceInMeters = await Geolocator().bearingBetween(
-        //   startCoordinates.latitude,
-        //   startCoordinates.longitude,
-        //   destinationCoordinates.latitude,
-        //   destinationCoordinates.longitude,
-        // );
-
-        await _createPolylines(startCoordinates, destinationCoordinates);
-
-        double totalDistance = 0.0;
-
-        // Calculating the total distance by adding the distance
-        // between small segments
-        for (int i = 0; i < polylineCoordinates.length - 1; i++) {
-          totalDistance += _coordinateDistance(
-            polylineCoordinates[i].latitude,
-            polylineCoordinates[i].longitude,
-            polylineCoordinates[i + 1].latitude,
-            polylineCoordinates[i + 1].longitude,
-          );
-        }
-
-        setState(() {
-          _placeDistance = totalDistance.toStringAsFixed(2);
-          print('DISTANCE: $_placeDistance km');
-        });
-
-        return true;
-
-    } catch (e) {
-      print(e);
-    }
-    return false;
-  }
-
-  // Formula for calculating distance between two coordinates
-  // https://stackoverflow.com/a/54138876/11910277
-  double _coordinateDistance(lat1, lon1, lat2, lon2) {
-    var p = 0.017453292519943295;
-    var c = cos;
-    var a = 0.5 -
-        c((lat2 - lat1) * p) / 2 +
-        c(lat1 * p) * c(lat2 * p) * (1 - c((lon2 - lon1) * p)) / 2;
-    return 12742 * asin(sqrt(a));
   }
 
   void updateUserLocation() async {
     try {
-     running = true;
+      _running = true;
+      _hasRun = false;
 
       Uint8List imageData = await getUserMarker();
       var location = await _locationTracker.getLocation();
@@ -355,6 +329,23 @@ class _MapPageState extends State<MapPage> {
       if (_locationSubscription != null) {
         _locationSubscription.cancel();
       }
+
+      getStringPrefs(Constants.groupID).then((value){
+        GroupService().saveInitialRun(
+          groupId: value
+        ).then((val){
+          print("Initial run saved successfully");
+        }).catchError((err){
+          print("Error saving initial run");
+        });
+      }).catchError((err){
+        print("Error getting Group ID: $err");
+      });
+
+
+      setState(() {
+        _startTime = DateTime.now();
+      });
 
       _locationSubscription =
           _locationTracker.onLocationChanged.listen((newLocalData) {
@@ -367,6 +358,8 @@ class _MapPageState extends State<MapPage> {
                   zoom: 18.00)));
           updateMarkerAndCircle(newLocalData, imageData);
         }
+        _currentPosition = MyGeolocator.Position(
+            longitude: newLocalData.longitude, latitude: newLocalData.latitude);
       });
     } on PlatformException catch (e) {
       if (e.code == 'PERMISSION_DENIED') {
@@ -377,10 +370,15 @@ class _MapPageState extends State<MapPage> {
 
   void stopTrackingUserLocation() async {
     try {
-      running = false;
+      setState(() {
+        if (_locationSubscription != null) {
+          _locationSubscription.cancel();
+        }
+        if (_markers.isNotEmpty) _markers.clear();
+      });
+      _running = false;
+      _hasRun = true;
       _getLastCurrentLocation();
-      finalDistance = _coordinateDistance(_firstUserPosition.latitude, _firstUserPosition.longitude, _lastUserPosition.latitude, _lastUserPosition.longitude);
-      _createPolylines(_firstUserPosition, _lastUserPosition);
     } on Exception catch (e) {
       debugPrint("Error due to $e");
     }
@@ -389,7 +387,10 @@ class _MapPageState extends State<MapPage> {
   @override
   void initState() {
     super.initState();
-    running = false;
+    setState(() {
+      _running = false;
+      _hasRun = false;
+    });
     _getFirstCurrentLocation();
   }
 
@@ -398,6 +399,11 @@ class _MapPageState extends State<MapPage> {
     if (_locationSubscription != null) {
       _locationSubscription.cancel();
     }
+    setState(() {
+      if (_markers.isNotEmpty) _markers.clear();
+      if (_polylines.isNotEmpty) _polylines.clear();
+      if (_polylineCoordinates.isNotEmpty) _polylineCoordinates.clear();
+    });
     super.dispose();
   }
 
@@ -415,7 +421,10 @@ class _MapPageState extends State<MapPage> {
               GoogleMap(
                 mapType: MapType.normal,
                 initialCameraPosition: initialLocation,
-                markers: markers != null ? Set<Marker>.from(markers) : null,
+                polylines: _myPolylines != null
+                    ? Set<Polyline>.from(_myPolylines)
+                    : null,
+                markers: _markers != null ? Set<Marker>.from(_markers) : null,
                 onMapCreated: (GoogleMapController controller) {
                   _controller = controller;
                 },
@@ -441,67 +450,72 @@ class _MapPageState extends State<MapPage> {
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
                             SizedBox(height: 10),
+                            Visibility(
+                                visible: _hasRun == true ? true : false,
+                                child: showDistance()),
                             SizedBox(height: 5),
                             Visibility(
-                              visible: running == false ? true: false,
+                              visible: (_running == false && _hasRun == false)
+                                  ? true
+                                  : false,
                               child: RaisedButton(
-                              onPressed:() async {
-                                updateUserLocation();
-                                setState(() {
-                                  if (markers.isNotEmpty) markers.clear();
-                                  if (polylines.isNotEmpty)
-                                    polylines.clear();
-                                  if (polylineCoordinates.isNotEmpty)
-                                    polylineCoordinates.clear();
-                                  _placeDistance = null;
-                                });
+                                onPressed: () async {
+                                  updateUserLocation();
                                 },
-
-                              color: Colors.red,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20.0),
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.all(8.0),
-                                child: Text(
-                                  'Start Run'.toUpperCase(),
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 20.0,
+                                color: Constants.appThemeColor,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(20.0),
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(8.0),
+                                  child: Text(
+                                    'Start Run'.toUpperCase(),
+                                    style: TextStyle(
+                                      color: Constants.myAccent,
+                                      fontSize: 20.0,
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
-                            ),
                             Visibility(
-                              visible: running == true ? true: false,
+                              visible: _running == true ? true : false,
                               child: RaisedButton(
-                                onPressed:
-                                    () async {
+                                onPressed: () async {
                                   stopTrackingUserLocation();
-
                                   _calculateDistance().then((isCalculated) {
                                     if (isCalculated) {
-                                      _scaffoldKey.currentState
-                                          .showSnackBar(
+                                      _scaffoldKey.currentState.showSnackBar(
                                         SnackBar(
                                           content: Text(
                                               'Distance Calculated Sucessfully'),
                                         ),
                                       );
+                                      setState(() {
+                                        if (_polylineCoordinates.isNotEmpty)
+                                          _polylineCoordinates.clear();
+                                      });
+                                      _totalDistance = 0.0;
                                     } else {
-                                      _scaffoldKey.currentState
-                                          .showSnackBar(
+                                      _scaffoldKey.currentState.showSnackBar(
                                         SnackBar(
                                           content: Text(
                                               'Error Calculating Distance'),
                                         ),
                                       );
+                                      setState(() {
+                                        if (_markers.isNotEmpty)
+                                          _markers.clear();
+                                        if (_polylines.isNotEmpty)
+                                          _polylines.clear();
+                                        if (_polylineCoordinates.isNotEmpty)
+                                          _polylineCoordinates.clear();
+                                      });
+                                      _totalDistance = 0.0;
                                     }
                                   });
-                                }
-                                    ,
-                                color: Colors.red,
+                                },
+                                color: Constants.appThemeColor,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(20.0),
                                 ),
@@ -510,7 +524,7 @@ class _MapPageState extends State<MapPage> {
                                   child: Text(
                                     'Stop Run'.toUpperCase(),
                                     style: TextStyle(
-                                      color: Colors.white,
+                                      color: Constants.myAccent,
                                       fontSize: 20.0,
                                     ),
                                   ),
@@ -536,21 +550,24 @@ class _MapPageState extends State<MapPage> {
                       children: <Widget>[
                         ClipOval(
                           child: Material(
-                            color: Colors.orange[100], // button color
+                            color: Constants.appThemeColor, // button color
                             child: InkWell(
                               splashColor: Colors.orange, // inkwell color
                               child: SizedBox(
                                 width: 56,
                                 height: 56,
-                                child: Icon(Icons.my_location),
+                                child: Icon(
+                                  Icons.my_location,
+                                  color: Constants.myAccent,
+                                ),
                               ),
                               onTap: () {
                                 _controller.animateCamera(
                                   CameraUpdate.newCameraPosition(
                                     CameraPosition(
                                       target: LatLng(
-                                        _firstUserPosition.latitude,
-                                        _firstUserPosition.longitude,
+                                        _currentPosition.latitude,
+                                        _currentPosition.longitude,
                                       ),
                                       zoom: 18.0,
                                     ),
@@ -568,5 +585,22 @@ class _MapPageState extends State<MapPage> {
             ],
           ),
         ));
+  }
+
+  Widget showNoDistanceMoved() {
+    return Scaffold(
+      body: Center(
+        child: Column(
+          children: [Text("You moved zero distance")],
+        ),
+      ),
+    );
+  }
+
+  Widget showDistance() {
+    return Text(
+      "Distance run is: ${_totalDistance.toStringAsFixed(2)} km",
+      style: TextStyle(color: Constants.appThemeColor, fontSize: 20),
+    );
   }
 }

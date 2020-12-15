@@ -1,12 +1,19 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:safety_tracker_app/models/models.dart';
+import 'package:safety_tracker_app/services/services.dart';
+import 'package:safety_tracker_app/utils/utils.dart';
 
 class AddNewMembers extends StatelessWidget {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      key: _scaffoldKey,
       appBar: AppBar(
-        title: Text("Create Group"),
+        title: Text("Add Friend to group"),
       ),
       body: AddNewMember(),
     );
@@ -28,17 +35,15 @@ class _AddNewMemberState extends State<AddNewMember> {
   bool _firstSearch = true;
   String _query = "";
 
-  List<String> _nebulae;
-  List<String> _filterList = <String>[];
-  List<String> _addedFriends = <String>[];
+  List<UserData> _nebulae;
+  List<UserData> _filterList = <UserData>[];
 
-  bool _maxFriends = false;
-  int _maxNumberOfFriends = 5;
+
   int _numberOfFriends = 0;
 
   bool isLoading = false;
 
-  _AddNewMemberState(){
+  _AddNewMemberState() {
     _searchview.addListener(() {
       if (_searchview.text.isEmpty) {
         //Notify the framework that the internal state of this object has changed.
@@ -53,9 +58,8 @@ class _AddNewMemberState extends State<AddNewMember> {
         });
       }
 
-      if(_numberOfFriends == 5){
+      if (_numberOfFriends == 5) {
         setState(() {
-          _maxFriends = true;
           _numberOfFriends = 0;
         });
       }
@@ -65,24 +69,41 @@ class _AddNewMemberState extends State<AddNewMember> {
   @override
   void initState() {
     super.initState();
-    _nebulae = new List<String>();
-    _nebulae = [
-      "Orion",
-      "Boomerang",
-      "Cat's Eye",
-      "Pelican",
-      "Ghost Head",
-      "Witch Head",
-      "Snake",
-      "Ant",
-      "Bernad 68",
-      "Flame",
-      "Eagle",
-      "Horse Head",
-      "Elephant's Trunk",
-      "Butterfly"
-    ];
+    _nebulae = new List<UserData>();
+    FirebaseFirestore.instance.collection("users").where("uid", isNotEqualTo: FirebaseAuth.instance.currentUser.uid).get().then((val) => {
+          if (val.docs.length > 0)
+            {
+              val.docs.forEach((element) {
+                var myUser = UserData.fromDocument(element);
+                if(myUser.groupId == null || myUser.groupId == ""){
+                  _nebulae.add(myUser);
+                } else {
+                 _alreadyInGroupDialog();
+                }
+              })
+            }
+          else
+            {print("Not found")}
+        });
     _nebulae.sort();
+  }
+
+  Future<Widget> _alreadyInGroupDialog(){
+    return showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text("Can't add user to group"),
+        content: Text("User is already a member of another group."),
+        actions: <Widget>[
+          FlatButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+            },
+            child: Text("OK"),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -90,12 +111,21 @@ class _AddNewMemberState extends State<AddNewMember> {
     return Center(
       child: Column(
         children: <Widget>[
-          Text("Add a friend by their username", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),),
-          const SizedBox(height: 20,),
+          Text(
+            "Add a friend by their username",
+            style: TextStyle(fontSize: 15,  color: Constants.appThemeColor, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(
+            height: 20,
+          ),
           _createSearchView(),
-          const SizedBox(height: 10,),
+          const SizedBox(
+            height: 10,
+          ),
           _firstSearch ? _createListView() : _performSearch(),
-          const SizedBox(height: 20,),
+          const SizedBox(
+            height: 20,
+          ),
         ],
       ),
     );
@@ -127,7 +157,7 @@ class _AddNewMemberState extends State<AddNewMember> {
               elevation: 5.0,
               child: new Container(
                 margin: EdgeInsets.all(15.0),
-                child: new Text("${_nebulae[index]}"),
+                child: new Text("${_nebulae[index].displayName}"),
               ),
             );
           }),
@@ -136,11 +166,12 @@ class _AddNewMemberState extends State<AddNewMember> {
 
   //Perform actual search
   Widget _performSearch() {
-    _filterList = new List<String>();
+    _filterList = new List<UserData>();
+    print("The user list is nebulae: $_nebulae");
     for (int i = 0; i < _nebulae.length; i++) {
       var item = _nebulae[i];
 
-      if (item.toLowerCase().contains(_query.toLowerCase())) {
+      if (item.displayName.toLowerCase().contains(_query.toLowerCase())) {
         _filterList.add(item);
       }
     }
@@ -150,28 +181,52 @@ class _AddNewMemberState extends State<AddNewMember> {
   //Create the Filtered ListView
   Widget _createFilteredListView() {
     return new Flexible(
-      child: new ListView.builder(
-          itemCount: _filterList.length,
-          itemBuilder: (BuildContext context, int index) {
-            return new InkWell(
-              child: Card(
-                color: Colors.white,
-                elevation: 5.0,
-                child: new Container(
-                  margin: EdgeInsets.all(15.0),
-                  child: new Text("${_filterList[index]}"),
-                ),
-              ),
-              onTap: () => {
-              Scaffold.of(context)
-                  .showSnackBar(SnackBar(content: Text("Friend Added", style: TextStyle(color: Colors.white),),)),
-                Future.delayed(const Duration(milliseconds: 1000), (){
-                  Navigator.pop(context);
-                }),
-              },
-            );
-          }),
+      child: FutureBuilder(
+        future: getStringPrefs(Constants.groupID),
+        builder: (context, snapshot){
+          Widget child;
+          if(snapshot.hasData){
+            child = new ListView.builder(
+                itemCount: _filterList.length,
+                itemBuilder: (BuildContext context, int index) {
+                  return new InkWell(
+                    child: Card(
+                      color: Colors.white,
+                      elevation: 5.0,
+                      child: new Container(
+                        margin: EdgeInsets.all(15.0),
+                        child: new Text("${_filterList[index].displayName}"),
+                      ),
+                    ),
+                    onTap: () => {
+                      GroupService()
+                          .addMember(
+                          groupId: snapshot.data, userId: _filterList[index].uid)
+                          .then((val) => {
+                        print("Friend added"),
+                        Scaffold.of(context).showSnackBar(SnackBar(
+                          content: Text(
+                            "Friend Added",
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        )),
+                        Future.delayed(const Duration(milliseconds: 1000),
+                                () {
+                              Navigator.pop(context);
+                            }),
+                      })
+                          .catchError((e) => {print("Error due to: $e")}),
+                    },
+                  );
+                });
+                return child;
+          }
+          else {
+            return Text("No group data yet!", style: TextStyle(color: Constants.appThemeColor, fontSize: 17) );
+          }
+        },
+      ),
     );
   }
-}
 
+}
